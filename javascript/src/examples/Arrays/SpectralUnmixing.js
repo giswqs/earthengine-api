@@ -1,8 +1,9 @@
 // Array-based spectral unmixing.
 
 // Create a mosaic of Landsat 5 images from June through September, 2007.
-var allBandMosaic = ee.ImageCollection('LT5_L1T')
+var allBandMosaic = ee.ImageCollection('LANDSAT/LT05/C01/T1')
   .filterDate('2007-06-01', '2007-09-30')
+  .select('B[0-7]')
   .median();
 
 // Create some representative endmembers computed previously by sampling
@@ -35,6 +36,6 @@ var colored = unmixed
 Map.setCenter(-98.4, 19, 11);
 
 // Load a hillshade to use as a backdrop.
-Map.addLayer(ee.Algorithms.Terrain(ee.Image('srtm90_v4')).select('hillshade'));
+Map.addLayer(ee.Algorithms.Terrain(ee.Image('CGIAR/SRTM90_V4')).select('hillshade'));
 Map.addLayer(colored, {min: 0, max: 1},
   'Unmixed (red=urban, green=veg, blue=water)');

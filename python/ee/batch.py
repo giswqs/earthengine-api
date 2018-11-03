@@ -113,9 +113,9 @@ class Task(object):
     tasks = []
     for status in statuses:
       tasks.append(Task(status['id'], {
-          'type': status['task_type'],
-          'description': status['description'],
-          'state': status['state'],
+          'type': status.get('task_type'),
+          'description': status.get('description'),
+          'state': status.get('state'),
       }))
     return tasks
 
@@ -169,6 +169,8 @@ class Export(object):
             - dimensions: The dimensions of the exported image. Takes either a
               single positive integer as the maximum dimension or
               "WIDTHxHEIGHT" where WIDTH and HEIGHT are each positive integers.
+            - skipEmptyTiles: If true, skip writing empty (i.e. fully-masked)
+              image tiles. Defaults to false.
             If exporting to Google Drive (default):
             - driveFolder: The name of a unique folder in your Drive account to
               export into. Defaults to the root of the drive.
@@ -187,7 +189,7 @@ class Export(object):
 
       if 'region' in config:
         # Convert the region to a serialized form, if necessary.
-        config['region'] = _GetSerializedRegion(config.get('region'))
+        config['region'] = _GetSerializedRegion(config['region'])
 
       return _CreateTask(
           Task.Type.EXPORT_IMAGE, image, description, config)
@@ -244,7 +246,7 @@ class Export(object):
 
       if 'region' in config:
         # Convert the region to a serialized form, if necessary.
-        config['region'] = _GetSerializedRegion(config.get('region'))
+        config['region'] = _GetSerializedRegion(config['region'])
 
       return _CreateTask(
           Task.Type.EXPORT_IMAGE, image, description, config)
@@ -256,7 +258,9 @@ class Export(object):
                        bucket=None, fileNamePrefix=None,
                        dimensions=None, region=None, scale=None,
                        crs=None, crsTransform=None, maxPixels=None,
-                       shardSize=None, fileDimensions=None, **kwargs):
+                       shardSize=None, fileDimensions=None,
+                       skipEmptyTiles=None, fileFormat=None, formatOptions=None,
+                       **kwargs):
       """Creates a task to export an EE Image to Google Cloud Storage.
 
       Args:
@@ -293,6 +297,12 @@ class Export(object):
             dimensions to indicate (width,height). Note that the image will
             still be clipped to the overall image dimensions. Must be a
             multiple of shardSize.
+        skipEmptyTiles: If true, skip writing empty (i.e. fully-masked)
+            image tiles. Defaults to false.
+        fileFormat: The string file format to which the image is exported.
+            Currently only 'GeoTIFF' and 'TFRecord' are supported, defaults to
+            'GeoTIFF'.
+        formatOptions: A dictionary of string keys to format specific options.
         **kwargs: Holds other keyword arguments that may have been deprecated
             such as 'crs_transform'.
 
@@ -304,10 +314,11 @@ class Export(object):
       config = _CopyDictFilterNone(locals())
 
       _ConvertToServerParams(config, 'image', Task.ExportDestination.GCS)
+      ConvertFormatSpecificParams(config)
 
       if 'region' in config:
         # Convert the region to a serialized form, if necessary.
-        config['region'] = _GetSerializedRegion(config.get('region'))
+        config['region'] = _GetSerializedRegion(config['region'])
 
       return _CreateTask(
           Task.Type.EXPORT_IMAGE, image, description, config)
@@ -315,8 +326,10 @@ class Export(object):
     @staticmethod
     def toDrive(image, description='myExportImageTask', folder=None,
                 fileNamePrefix=None, dimensions=None, region=None,
-                scale=None, crs=None, crsTransform=None, maxPixels=None,
-                shardSize=None, fileDimensions=None, **kwargs):
+                scale=None, crs=None, crsTransform=None,
+                maxPixels=None, shardSize=None, fileDimensions=None,
+                skipEmptyTiles=None, fileFormat=None, formatOptions=None,
+                **kwargs):
       """Creates a task to export an EE Image to Drive.
 
       Args:
@@ -354,6 +367,12 @@ class Export(object):
             dimensions to indicate (width,height). Note that the image will
             still be clipped to the overall image dimensions. Must be a
             multiple of shardSize.
+        skipEmptyTiles: If true, skip writing empty (i.e. fully-masked)
+            image tiles. Defaults to false.
+        fileFormat: The string file format to which the image is exported.
+            Currently only 'GeoTIFF' and 'TFRecord' are supported, defaults to
+            'GeoTIFF'.
+        formatOptions: A dictionary of string keys to format specific options.
         **kwargs: Holds other keyword arguments that may have been deprecated
             such as 'crs_transform', 'driveFolder', and 'driveFileNamePrefix'.
 
@@ -369,10 +388,11 @@ class Export(object):
         config['fileNamePrefix'] = description
 
       _ConvertToServerParams(config, 'image', Task.ExportDestination.DRIVE)
+      ConvertFormatSpecificParams(config)
 
       if 'region' in config:
         # Convert the region to a serialized form, if necessary.
-        config['region'] = _GetSerializedRegion(config.get('region'))
+        config['region'] = _GetSerializedRegion(config['region'])
 
       return _CreateTask(
           Task.Type.EXPORT_IMAGE, image, description, config)
@@ -396,7 +416,8 @@ class Export(object):
 
       Exports a rectangular pyramid of map tiles for use with web map
       viewers. The map tiles will be accompanied by a reference
-      index.html file that displays them using the Google Maps API.
+      index.html file that displays them using the Google Maps API,
+      and an earth.html file for opening the map on Google Earth.
 
       Args:
         image: The image to export as tiles.
@@ -409,7 +430,7 @@ class Export(object):
         path: The string used as the output's path. A trailing '/'
             is optional. Defaults to the task's description.
         writePublicTiles: Whether to write public tiles instead of using the
-            bucket's default object ACL. Defaults to true and requires the
+            bucket's default object ACL. Defaults to True and requires the
             invoker to be an OWNER of bucket.
         maxZoom: The maximum zoom level of the map tiles to export.
         scale: The max image resolution in meters per pixel, as an alternative
@@ -422,7 +443,7 @@ class Export(object):
             produced in the rectangular region containing this geometry.
             Defaults to the image's region.
         skipEmptyTiles: If true, skip writing empty (i.e. fully-transparent)
-            map tiles.
+            map tiles. Defaults to false.
         **kwargs: Holds other keyword arguments that may have been deprecated
             such as 'crs_transform'.
 
@@ -447,7 +468,7 @@ class Export(object):
         config['writePublicTiles'] = True
       if 'region' in config:
         # Convert the region to a serialized form, if necessary.
-        config['region'] = _GetSerializedRegion(config.get('region'))
+        config['region'] = _GetSerializedRegion(config['region'])
 
       return _CreateTask(
           Task.Type.EXPORT_MAP, image, description, config)
@@ -471,7 +492,7 @@ class Export(object):
         config: A dictionary that will be copied and used as parameters
             for the task:
             - fileFormat: The output format: "CSV" (default), "GeoJSON", "KML",
-              or "KMZ".
+              "KMZ", or "SHP".
             If exporting to Google Drive (default):
             - driveFolder: The name of a unique folder in your Drive
               account to export into. Defaults to the root of the drive.
@@ -497,7 +518,7 @@ class Export(object):
     @staticmethod
     def toCloudStorage(collection, description='myExportTableTask',
                        bucket=None, fileNamePrefix=None,
-                       fileFormat=None, **kwargs):
+                       fileFormat=None, selectors=None, **kwargs):
       """Creates a task to export a FeatureCollection to Google Cloud Storage.
 
       Args:
@@ -506,8 +527,11 @@ class Export(object):
         bucket: The name of a Cloud Storage bucket for the export.
         fileNamePrefix: Cloud Storage object name prefix for the export.
             Defaults to the name of the task.
-        fileFormat: The output format: "CSV" (default), "GeoJSON", "KML",
-            or "KMZ".
+        fileFormat: The output format: "CSV" (default), "GeoJSON", "KML", "KMZ",
+            "SHP", or "TFRecord".
+        selectors: The list of properties to include in the output, as a list
+            of strings or a comma-separated string. By default, all properties
+            are included.
         **kwargs: Holds other keyword arguments that may have been deprecated
             such as 'outputBucket'.
 
@@ -529,7 +553,8 @@ class Export(object):
 
     @staticmethod
     def toDrive(collection, description='myExportTableTask',
-                folder=None, fileNamePrefix=None, fileFormat=None, **kwargs):
+                folder=None, fileNamePrefix=None, fileFormat=None,
+                selectors=None, **kwargs):
       """Creates a task to export a FeatureCollection to Google Cloud Storage.
 
       Args:
@@ -540,7 +565,10 @@ class Export(object):
         fileNamePrefix: The Google Drive filename for the export.
             Defaults to the name of the task.
         fileFormat: The output format: "CSV" (default), "GeoJSON", "KML",
-            or "KMZ".
+            "KMZ", "SHP", or "TFRecord".
+        selectors: The list of properties to include in the output, as a list
+            of strings or a comma-separated string. By default, all properties
+            are included.
         **kwargs: Holds other keyword arguments that may have been deprecated
             such as 'driveFolder' and 'driveFileNamePrefix'.
 
@@ -559,6 +587,30 @@ class Export(object):
 
       _ConvertToServerParams(
           config, 'collection', Task.ExportDestination.DRIVE)
+
+      return _CreateTask(
+          Task.Type.EXPORT_TABLE, collection, description, config)
+
+    @staticmethod
+    def toAsset(collection, description='myExportTableTask', assetId=None,
+                **kwargs):
+      """Creates a task to export a FeatureCollection to an EE table asset.
+
+      Args:
+        collection: The feature collection to be exported.
+        description: Human-readable name of the task.
+        assetId: The destination asset ID.
+        **kwargs: Holds other keyword arguments that may have been deprecated.
+
+      Returns:
+        An unstarted Task that exports the table.
+      """
+      # _CopyDictFilterNone must be called first because it copies locals to
+      # support deprecated arguments.
+      config = _CopyDictFilterNone(locals())
+
+      _ConvertToServerParams(
+          config, 'collection', Task.ExportDestination.ASSET)
 
       return _CreateTask(
           Task.Type.EXPORT_TABLE, collection, description, config)
@@ -620,7 +672,7 @@ class Export(object):
 
       if 'region' in config:
         # Convert the region to a serialized form, if necessary.
-        config['region'] = _GetSerializedRegion(config.get('region'))
+        config['region'] = _GetSerializedRegion(config['region'])
 
       return _CreateTask(
           Task.Type.EXPORT_VIDEO, collection, description, config)
@@ -684,7 +736,7 @@ class Export(object):
 
       if 'region' in config:
         # Convert the region to a serialized form, if necessary.
-        config['region'] = _GetSerializedRegion(config.get('region'))
+        config['region'] = _GetSerializedRegion(config['region'])
 
       return _CreateTask(
           Task.Type.EXPORT_VIDEO, collection, description, config)
@@ -745,11 +797,107 @@ class Export(object):
 
       if 'region' in config:
         # Convert the region to a serialized form, if necessary.
-        config['region'] = _GetSerializedRegion(config.get('region'))
+        config['region'] = _GetSerializedRegion(config['region'])
 
       return _CreateTask(
           Task.Type.EXPORT_VIDEO, collection, description, config)
-    # pylint: enable=unused-argument
+
+
+
+def _CheckConfigDisallowedPrefixes(config, prefix):
+  for key in config:
+    if key.startswith(prefix):
+      raise ee_exception.EEException(
+          'Export config parameter prefix \'{}\' disallowed, found \'{}\''.
+          format(prefix, key))
+
+# Mapping from file formats to prefixes attached to format specific config.
+FORMAT_PREFIX_MAP = {'GEOTIFF': 'tiff', 'TFRECORD': 'tfrecord'}
+
+# Configuration field specifying file format for image exports.
+IMAGE_FORMAT_FIELD = 'fileFormat'
+
+# Image format-specific options dictionary config field.
+IMAGE_FORMAT_OPTIONS_FIELD = 'formatOptions'
+
+# Format-specific options permitted in formatOptions config parameter.
+ALLOWED_FORMAT_OPTIONS = {
+    'tiffCloudOptimized', 'tiffFileDimensions', 'tfrecordPatchDimensions',
+    'tfrecordKernelSize', 'tfrecordCompressed', 'tfrecordMaxFileSize',
+    'tfrecordDefaultValue', 'tfrecordTensorDepths', 'tfrecordSequenceData',
+    'tfrecordCollapseBands', 'tfrecordMaskedThreshold'
+}
+
+
+def _ConvertConfigParams(config):
+  """Converts numeric sequences into comma-separated string representations."""
+  updatedConfig = {}
+  for k, v in config.items():
+    if v and isinstance(v, (list, tuple)):
+      # Leave nested lists/tuples alone. We're only interested in converting
+      # lists of strings or numbers.
+      if not isinstance(v[0], (list, tuple)):
+        updatedConfig[k] = ','.join(str(e) for e in v)
+
+  return updatedConfig
+
+
+# TODO(user): This method and its uses are very hack-y, and once we're using One
+# Platform API we should stop sending arbitrary parameters from "options".
+def ConvertFormatSpecificParams(configDict):
+  """Mutates configDict into server params by extracting format options.
+
+    For example:
+      {'fileFormat': 'GeoTIFF', 'formatOptions': {'cloudOptimized': true}}
+    becomes:
+      {'fileFormat': 'GeoTIFF', 'tiffCloudOptimized': true}
+
+    Also performs checks to make sure any specified options are valid and/or
+    won't collide with top level arguments when converted to server-friendly
+    parameters.
+
+  Args:
+    configDict: A task config dict
+
+  Raises:
+    EEException: We were unable to create format specific parameters for the
+    server.
+  """
+
+  formatString = 'GeoTIFF'
+  if IMAGE_FORMAT_FIELD in configDict:
+    formatString = configDict[IMAGE_FORMAT_FIELD]
+
+  formatString = formatString.upper()
+  if formatString not in FORMAT_PREFIX_MAP:
+    raise ee_exception.EEException(
+        'Invalid file format. Currently only \'GeoTIFF\' and \'TFRecord\' is '
+        'supported.')
+
+  if IMAGE_FORMAT_OPTIONS_FIELD in configDict:
+    options = configDict[IMAGE_FORMAT_OPTIONS_FIELD]
+    del configDict[IMAGE_FORMAT_OPTIONS_FIELD]
+
+    if set(options) & set(configDict):
+      raise ee_exception.EEException(
+          'Parameter specified at least twice: once in config, '
+          'and once in format options.')
+
+    prefix = FORMAT_PREFIX_MAP[formatString]
+    _CheckConfigDisallowedPrefixes(configDict, prefix)
+
+    prefixedOptions = {}
+    for key, value in options.items():
+      prefixedKey = prefix + key[:1].upper() + key[1:]
+      if prefixedKey not in ALLOWED_FORMAT_OPTIONS:
+        raise ee_exception.EEException(
+            '\'{}\' is not a valid option for \'{}\'.'.format(
+                key, formatString))
+      prefixedOptions[prefixedKey] = value
+
+    prefixedOptions.update(_ConvertConfigParams(prefixedOptions))
+
+    configDict.update(prefixedOptions)
 
 
 def _CreateTask(task_type, ee_object, description, config):
@@ -764,6 +912,7 @@ def _CreateTask(task_type, ee_object, description, config):
   Returns:
     An unstarted export Task.
   """
+  config.update(_ConvertConfigParams(config))
   full_config = {
       'type': task_type,
       'json': ee_object.serialize(),
@@ -816,15 +965,6 @@ def _ConvertToServerParams(configDict, eeElementKey, destination):
 
   if 'crsTransform' in configDict:
     configDict['crs_transform'] = configDict.pop('crsTransform')
-
-  # Convert iterable fileDimensions to a comma-separated string.
-  if 'fileDimensions' in configDict:
-    dimensions = configDict['fileDimensions']
-    try:
-      configDict['fileDimensions'] = ','.join('%d' % dim for dim in dimensions)
-    except TypeError:
-      # We pass numbers straight through.
-      pass
 
   if destination is Task.ExportDestination.GCS:
     if 'bucket' in configDict:

@@ -3,15 +3,52 @@
 
 import httplib2
 import mock
+from six.moves import urllib
 import unittest
 import ee
 
 
 class DataTest(unittest.TestCase):
 
-  def testSuccess(self):
+  def testGetTaskList(self):
+
+    def Request(unused_self, url, method, body, headers):
+      _ = method, body, headers  # Unused kwargs.
+
+      parse_result = urllib.parse.urlparse(url)
+      if parse_result.path != '/api/tasklist':
+        return httplib2.Response({'status': 404}), 'not found'
+
+      resp_body = '{}'
+      query_args = urllib.parse.parse_qs(parse_result.query)
+      if query_args == {'pagesize': ['500']}:
+        resp_body = ('{"data": {"tasks": [{"id": "1"}],'
+                     ' "next_page_token": "foo"}}')
+      elif query_args == {'pagesize': ['500'], 'pagetoken': ['foo']}:
+        resp_body = '{"data": {"tasks": [{"id": "2"}]}}'
+
+      response = httplib2.Response({
+          'status': 200,
+          'content-type': 'application/json',
+      })
+      return response, resp_body
+
+    with mock.patch('httplib2.Http.request', new=Request):
+      self.assertEqual([{'id': '1'}, {'id': '2'}], ee.data.getTaskList())
+
+
+  @mock.patch('time.sleep')
+  def testSuccess(self, mock_sleep):
     with DoStubHttp(200, 'application/json', '{"data": "bar"}'):
       self.assertEqual('bar', ee.data.send_('/foo', {}))
+    self.assertEqual(False, mock_sleep.called)
+
+  @mock.patch('time.sleep')
+  def testRetry(self, mock_sleep):
+    with DoStubHttp(429, 'application/json', '{"data": "bar"}'):
+      with self.assertRaises(ee.ee_exception.EEException):
+        ee.data.send_('/foo', {})
+    self.assertEqual(5, mock_sleep.call_count)
 
   def testNon200Success(self):
     with DoStubHttp(202, 'application/json', '{"data": "bar"}'):
@@ -113,6 +150,7 @@ class DataTest(unittest.TestCase):
       ee.data.send_('/foo', {})
 
 
+
 def DoStubHttp(status, mime, resp_body):
   """Context manager for temporarily overriding Http."""
   def Request(unused_self, unused_url, method, body, headers):
@@ -134,10 +172,13 @@ def DoProfileStubHttp(test, expect_profiling):
         'content-type': 'application/json'
     }
     if expect_profiling:
-      response_dict['x-earth-engine-computation-profile'] = 'someProfileId'
+      response_dict[
+          ee.data._PROFILE_RESPONSE_HEADER_LOWERCASE] = 'someProfileId'
     response = httplib2.Response(response_dict)
     return response, '{"data": "dummy_data"}'
   return mock.patch('httplib2.Http.request', new=Request)
+
+
 
 
 class ExceptionForTest(Exception):

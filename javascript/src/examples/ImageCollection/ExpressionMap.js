@@ -5,7 +5,7 @@
 // Image.expression.
 
 // Filter the L7 collection to a single month.
-var collection = ee.ImageCollection('LE7_L1T_TOA')
+var collection = ee.ImageCollection('LANDSAT/LE07/C01/T1_TOA')
     .filterDate('2002-11-01', '2002-12-01');
 
 // A function to compute NDVI.
@@ -15,7 +15,7 @@ var NDVI = function(image) {
 
 // A function to compute Soil Adjusted Vegetation Index.
 var SAVI = function(image) {
-  return ee.Image(0).expression(
+  return image.expression(
       '(1 + L) * float(nir - red)/ (nir + red + L)',
       {
         'nir': image.select('B4'),
@@ -36,5 +36,7 @@ var vis = {
 };
 
 Map.setCenter(-93.7848, 30.3252, 11);
+
+// Map the functions over the collection, reduce to mean and display.
 Map.addLayer(collection.map(NDVI).mean(), vis, 'Mean NDVI');
 Map.addLayer(collection.map(SAVI).mean(), vis, 'Mean SAVI');

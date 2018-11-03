@@ -22,7 +22,7 @@ class String(computedobject.ComputedObject):
   def __init__(self, string):
     """Construct a string wrapper.
 
-    This constuctor accepts the following args:
+    This constructor accepts the following args:
       1) A bare string.
       2) A ComputedObject returning a string.
 
@@ -68,3 +68,4 @@ class String(computedobject.ComputedObject):
       return self._string
     else:
       return self._string.encode(opt_encoder)
+

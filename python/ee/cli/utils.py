@@ -47,11 +47,13 @@ class CommandLineConfig(object):
   specified as a constructor argument. If not provided, it attempts to load
   the configuration from a file specified via the EE_CONFIG_FILE environment
   variable. If the variable is not set, it looks for a JSON file at the
-  path ~/.config/earthengine/credentials. If all fails, it fallsback to using
+  path ~/.config/earthengine/credentials. If all fails, it falls back to using
   some predefined defaults for each configuration parameter.
+
+  If --service_account_file is specified, it is used instead.
   """
 
-  def __init__(self, config_file=None):
+  def __init__(self, config_file=None, service_account_file=None):
     if not config_file:
       config_file = os.environ.get(EE_CONFIG_FILE, DEFAULT_EE_CONFIG_FILE)
     self.config_file = config_file
@@ -61,10 +63,20 @@ class CommandLineConfig(object):
         config = json.load(config_file_json)
     for key, default_value in CONFIG_PARAMS.items():
       setattr(self, key, config.get(key, default_value))
+    self.service_account_file = service_account_file
+    if service_account_file:
+      # Load the file to verify that it exists.
+      with open(service_account_file) as service_file_json:
+        service = json.load(service_file_json)
+      for key, value in service.items():
+        setattr(self, key, value)
 
   def ee_init(self):
-    """Load the EE credentils and initialize the EE client."""
-    if self.account and self.private_key:
+    """Loads the EE credentials and initializes the EE client."""
+    if self.service_account_file:
+      credentials = ee.ServiceAccountCredentials(
+          self.client_email, self.service_account_file)
+    elif self.account and self.private_key:
       credentials = ee.ServiceAccountCredentials(self.account, self.private_key)
     elif self.refresh_token:
       credentials = oauth2client.client.OAuth2Credentials(
@@ -74,7 +86,10 @@ class CommandLineConfig(object):
     else:
       credentials = 'persistent'
 
-    ee.Initialize(credentials=credentials, opt_url=self.url)
+    ee.Initialize(
+        credentials=credentials,
+        opt_url=self.url
+    )
 
   def save(self):
     config = {}
@@ -116,7 +131,7 @@ def wait_for_task(task_id, timeout, log_progress=True):
       print('Task %s ended at state: %s after %.2f seconds'
             % (task_id, state, elapsed))
       if error_message:
-        print('Error: %s' % error_message)
+        raise ee.ee_exception.EEException('Error: %s' % error_message)
       return
     if log_progress and elapsed - last_check >= 30:
       print('[{:%H:%M:%S}] Current state for task {}: {}'
@@ -237,14 +252,14 @@ def _gcs_ls(bucket, prefix=''):
           'Unexpected HTTP error: %s' % e.message)
 
     if response.status < 100 or response.status >= 300:
-      raise ee.ee_exception.EEException(('Error retreiving bucket %s;'
+      raise ee.ee_exception.EEException(('Error retrieving bucket %s;'
                                          ' Server returned HTTP code: %d' %
                                          (bucket, response.status)))
 
     json_content = json.loads(content)
     if 'error' in json_content:
       json_error = json_content['error']['message']
-      raise ee.ee_exception.EEException('Error retreiving bucket %s: %s' %
+      raise ee.ee_exception.EEException('Error retrieving bucket %s: %s' %
                                         (bucket, json_error))
 
     objects = json_content['items']

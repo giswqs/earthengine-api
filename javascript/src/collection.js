@@ -66,22 +66,19 @@ ee.Collection.reset = function() {
 /**
  * Apply a filter to this collection.
  *
- * Collection filtering is done by wrapping a collection in a filter
- * algorithm.  As additional filters are applied to a collection, we
- * try to avoid adding more wrappers and instead search for a wrapper
- * we can add to, however if the collection doesn't have a filter, this
- * will wrap it in one.
- *
- * @param {ee.Filter} newFilter A filter to add to this collection.
+ * @param {ee.Filter} filter A filter to apply to this collection.
  * @return {ee.Collection} The filtered collection.
  * @export
  */
-ee.Collection.prototype.filter = function(newFilter) {
-  if (!newFilter) {
+ee.Collection.prototype.filter = function(filter) {
+  var args = ee.arguments.extractFromFunction(
+      ee.Collection.prototype.filter, arguments);
+  filter = args['filter'];
+  if (!filter) {
     throw new Error('Empty filters.');
   }
   return this.castInternal(ee.ApiFunction._call(
-      'Collection.filter', this, newFilter));
+      'Collection.filter', this, filter));
 };
 
 
@@ -102,7 +99,7 @@ ee.Collection.prototype.filter = function(newFilter) {
  * TODO(user): Decide whether to deprecate this.
  */
 ee.Collection.prototype.filterMetadata = function(name, operator, value) {
-  var args = ee.arguments.extract(
+  var args = ee.arguments.extractFromFunction(
       ee.Collection.prototype.filterMetadata, arguments);
   return this.filter(ee.Filter.metadata(
       args['name'], args['operator'], args['value']));
@@ -139,7 +136,7 @@ ee.Collection.prototype.filterBounds = function(geometry) {
  * @export
  */
 ee.Collection.prototype.filterDate = function(start, opt_end) {
-  var args = ee.arguments.extract(
+  var args = ee.arguments.extractFromFunction(
       ee.Collection.prototype.filterDate, arguments);
   return this.filter(ee.Filter.date(args['start'], args['end']));
 };
@@ -157,7 +154,8 @@ ee.Collection.prototype.filterDate = function(start, opt_end) {
  * @export
  */
 ee.Collection.prototype.limit = function(max, opt_property, opt_ascending) {
-  var args = ee.arguments.extract(ee.Collection.prototype.limit, arguments);
+  var args = ee.arguments.extractFromFunction(
+      ee.Collection.prototype.limit, arguments);
   return this.castInternal(ee.ApiFunction._call(
       'Collection.limit', this,
       args['max'], args['property'], args['ascending']));
@@ -174,7 +172,8 @@ ee.Collection.prototype.limit = function(max, opt_property, opt_ascending) {
  * @export
  */
 ee.Collection.prototype.sort = function(property, opt_ascending) {
-  var args = ee.arguments.extract(ee.Collection.prototype.sort, arguments);
+  var args = ee.arguments.extractFromFunction(
+      ee.Collection.prototype.sort, arguments);
   return this.castInternal(ee.ApiFunction._call(
       'Collection.limit', this,
       undefined, args['property'], args['ascending']));

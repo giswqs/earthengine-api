@@ -35,8 +35,8 @@ var cloudScore = function(img) {
 };
 
 // Filter the TOA collection to a time-range and add the cloudscore band.
-var collection = ee.ImageCollection('LC8_L1T_TOA')
-    .filterDate('2013-05-01', '2013-07-01')
+var collection = ee.ImageCollection('LANDSAT/LC08/C01/T1_TOA')
+    .filterDate('2017-05-01', '2017-07-01')
     .map(function(img) {
       // Invert the cloudscore so 1 is least cloudy, and rename the band.
       var score = cloudScore(img.select(LC8_BANDS, STD_NAMES));
@@ -45,6 +45,6 @@ var collection = ee.ImageCollection('LC8_L1T_TOA')
     });
 
 // Define visualization parameters for a true color image.
-var vizParams = {'bands': ['B4', 'B3', 'B2'], 'max': 0.4, 'gamma': 1.6};
+var vizParams = {bands: ['B4', 'B3', 'B2'], max: 0.4, gamma: 1.6};
 Map.setCenter(-120.24487, 37.52280, 8);
 Map.addLayer(collection.qualityMosaic('cloudscore'), vizParams);

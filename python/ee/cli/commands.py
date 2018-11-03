@@ -10,6 +10,7 @@ from __future__ import print_function
 
 # pylint: disable=g-bad-import-order
 from six.moves import input  # pylint: disable=redefined-builtin
+from six.moves import xrange
 import argparse
 import calendar
 from collections import Counter
@@ -68,11 +69,17 @@ def _add_wait_arg(parser):
             ' task in the background, and returns immediately.'))
 
 
+def _add_overwrite_arg(parser):
+  parser.add_argument(
+      '--force', '-f', action='store_true',
+      help='Overwrite any existing version of the asset.')
+
+
 def _upload(args, request, ingestion_function):
   if 0 <= args.wait < 10:
     raise ee.EEException('Wait time should be at least 10 seconds.')
-  task_id = ee.data.newTaskId()[0]
-  ingestion_function(task_id, request)
+  request_id = ee.data.newTaskId()[0]
+  task_id = ingestion_function(request_id, request, args.force)['id']
   print('Started upload task with ID: %s' % task_id)
   if args.wait >= 0:
     print('Waiting for the upload task to complete...')
@@ -80,6 +87,15 @@ def _upload(args, request, ingestion_function):
 
 
 # Argument types
+def _comma_separated_strings(string):
+  """Parses an input consisting of comma-separated strings."""
+  error_msg = 'Argument should be a comma-separated list of strings: {}'
+  values = string.split(',')
+  if not values:
+    raise argparse.ArgumentTypeError(error_msg.format(string))
+  return values
+
+
 def _comma_separated_numbers(string):
   """Parses an input consisting of comma-separated numbers."""
   error_msg = 'Argument should be a comma-separated list of numbers: {}'
@@ -107,9 +123,10 @@ def _comma_separated_pyramiding_policies(string):
     raise argparse.ArgumentTypeError(error_msg.format(string))
   redvalues = []
   for value in values:
-    if value.lower() not in {'mean', 'sample', 'min', 'max', 'mode'}:
+    value = value.upper()
+    if value not in {'MEAN', 'SAMPLE', 'MIN', 'MAX', 'MODE'}:
       raise argparse.ArgumentTypeError(error_msg.format(string))
-    redvalues.append(value.lower())
+    redvalues.append(value)
   return redvalues
 
 
@@ -130,7 +147,20 @@ def _timestamp_ms_for_datetime(datetime_obj):
 
 
 def _decode_date(string):
-  """Decodes a date from a command line argument, as msec since the epoch."""
+  """Decodes a date from a command line argument, returning msec since epoch".
+
+  Args:
+    string: See AssetSetCommand class comment for the allowable
+      date formats.
+
+  Returns:
+    long, ms since epoch
+
+  Raises:
+    argparse.ArgumentTypeError: if string does not conform to a legal
+      date format.
+  """
+
   try:
     return int(string)
   except ValueError:
@@ -148,13 +178,30 @@ def _decode_date(string):
 
 
 def _decode_property(string):
-  """Decodes a general key-value property from a command line argument."""
+  """Decodes a general key-value property from a command-line argument.
+
+  Args:
+    string: The string must have the form name=value or (type)name=value, where
+      type is one of 'number', 'string', or 'date'. The value format for dates
+      is YYYY-MM-DD[THH:MM:SS[.MS]].  The value 'null' is special: it evaluates
+      to None unless it is cast to a string of 'null'.
+
+  Returns:
+    a tuple representing the property in the format (name, value)
+
+  Raises:
+    argparse.ArgumentTypeError: if the flag value could not be decoded or if
+    the type is not recognized
+  """
+
   m = PROPERTY_RE.match(string)
   if not m:
     raise argparse.ArgumentTypeError(
         'Invalid property: "%s". Must have the form "name=value" or '
         '"(type)name=value".', string)
   _, type_str, name, value_str = m.groups()
+  if value_str == 'null' and type_str != TYPE_STRING:
+    return (name, None)
   if type_str is None:
     # Guess numeric types automatically.
     try:
@@ -170,7 +217,7 @@ def _decode_property(string):
   else:
     raise argparse.ArgumentTypeError(
         'Unrecognized property type name: "%s". Expected one of "string", '
-        '"number", "date", or a prefix.' % type_str)
+        '"number", or "date".' % type_str)
   return (name, value)
 
 
@@ -242,27 +289,54 @@ class AuthenticateCommand(object):
 
   name = 'authenticate'
 
-  def __init__(self, unused_parser):
-    pass
+  def __init__(self, parser):
+    parser.add_argument(
+        '--authorization-code',
+        help='Use this specified authorization code.')
+    parser.add_argument(
+        '--quiet',
+        action='store_true',
+        help='Do not issue any interactive prompts.')
 
-  def run(self, unused_args, unused_config):
-    """Generates and opens a URL to get auth code, then retrieve a token."""
+  def run(self, args, unused_config):
+    """Prompts for an auth code, requests a token and saves it."""
+
+    def write_token(auth_code):
+      token = ee.oauth.request_token(auth_code)
+      ee.oauth.write_token(token)
+      print('\nSuccessfully saved authorization token.')
+
+    if args.authorization_code:
+      auth_code = args.authorization_code
+      write_token(auth_code)
+      return
 
     auth_url = ee.oauth.get_authorization_url()
-    webbrowser.open_new(auth_url)
+    if args.quiet:
+      print('Paste the following address into a web browser:\n'
+            '\n'
+            '    %s\n'
+            '\n'
+            'On the web page, please authorize access to your '
+            'Earth Engine account and copy the authentication code. '
+            'Next authenticate with the following command:\n'
+            '\n'
+            '    earthengine authenticate '
+            '--authorization-code=PLACE_AUTH_CODE_HERE\n'
+            % auth_url)
+    else:
+      webbrowser.open_new(auth_url)
+      print('Opening the following address in a web browser:\n'
+            '\n'
+            '    %s\n'
+            '\n'
+            'Please authorize access to your Earth Engine account, and paste '
+            'the generated code below. If the web browser does not start, '
+            'please manually browse the URL above.\n'
+            % auth_url)
 
-    print("""
-    Opening web browser to address %s
-    Please authorize access to your Earth Engine account, and paste
-    the resulting code below.
-    If the web browser does not start, please manually browse the URL above.
-          """ % auth_url)
-
-    auth_code = input('Please enter authorization code: ').strip()
-
-    token = ee.oauth.request_token(auth_code)
-    ee.oauth.write_token(token)
-    print('\nSuccessfully saved authorization token.')
+      auth_code = input('Please enter authorization code: ').strip()
+      write_token(auth_code)
 
 
 class AclChCommand(object):
@@ -438,6 +512,11 @@ class AssetSetCommand(object):
   be specified in the form YYYY-MM-DD[Thh:mm:ss[.ff]] in UTC and are
   stored as numbers representing the number of milliseconds since the
   Unix epoch (00:00:00 UTC on 1 January 1970).
+
+  To delete a property, set it to null without a type:
+     prop=null.
+  To set a property to the string value 'null', use the assignment
+     (string)prop4=null.
   """
 
   name = 'set'
@@ -477,11 +556,18 @@ class CopyCommand(object):
         'source', help='Full path of the source asset.')
     parser.add_argument(
         'destination', help='Full path of the destination asset.')
+    parser.add_argument(
+        '--force', action='store_true', help=(
+            'Overwrite any existing version of the asset.'))
 
   def run(self, args, config):
     """Runs the asset copy."""
     config.ee_init()
-    ee.data.copyAsset(args.source, args.destination)
+    ee.data.copyAsset(
+        args.source,
+        args.destination,
+        args.force
+    )
 
 
 class CreateCommandBase(object):
@@ -544,31 +630,46 @@ class ListCommand(object):
         'asset_id', nargs='*',
         help='A folder or image collection to be inspected.')
     parser.add_argument(
-        '-l', action='store_true',
+        '--long_format',
+        '-l',
+        action='store_true',
         help='Print output in long format.')
     parser.add_argument(
         '--max_items', '-m', default=-1, type=int,
         help='Maximum number of items to list for each collection.')
+    parser.add_argument(
+        '--recursive',
+        '-r',
+        action='store_true',
+        help='List folders recursively.')
 
   def run(self, args, config):
     config.ee_init()
     if not args.asset_id:
       roots = ee.data.getAssetRoots()
-      self._print_assets(roots, '', args.l)
+      self._print_assets(roots, args.max_items, '', args.long_format,
+                         args.recursive)
       return
     assets = args.asset_id
     count = 0
     for asset in assets:
       if count > 0:
         print()
-      self._list_asset_content(
-          asset, args.max_items, len(assets), args.l)
+      self._list_asset_content(asset, args.max_items,
+                               len(assets), args.long_format, args.recursive)
       count += 1
 
-  def _print_assets(self, assets, indent, long_format):
+  def _print_assets(self, assets, max_items, indent, long_format, recursive):
+    """Prints the listing of given assets."""
     if not assets:
       return
+
     max_type_length = max([len(asset['type']) for asset in assets])
+
+    if recursive:
+      # fallback to max to include the string 'ImageCollection'
+      max_type_length = ee.data.MAX_TYPE_LENGTH
+
     format_str = '%s{:%ds}{:s}' % (indent, max_type_length + 4)
     for asset in assets:
       if long_format:
@@ -576,10 +677,17 @@ class ListCommand(object):
         # [Image]           user/test/my_img
         # [ImageCollection] user/test/my_coll
         print(format_str.format('['+asset['type']+']', asset['id']))
+
       else:
         print(asset['id'])
 
-  def _list_asset_content(self, asset, max_items, total_assets, long_format):
+      if recursive and asset['type'] == ee.data.ASSET_TYPE_FOLDER:
+        list_req = {'id': asset['id']}
+        children = ee.data.getList(list_req)
+        self._print_assets(children, max_items, indent, long_format, recursive)
+
+  def _list_asset_content(self, asset, max_items, total_assets, long_format,
+                          recursive):
     try:
       list_req = {'id': asset}
       if max_items >= 0:
@@ -589,9 +697,87 @@ class ListCommand(object):
       if total_assets > 1:
         print('%s:' % asset)
         indent = '  '
-      self._print_assets(children, indent, long_format)
+      self._print_assets(children, max_items, indent, long_format, recursive)
     except ee.EEException as e:
       print(e)
+
+
+class SizeCommand(object):
+  """Prints the size and names of all items in a given folder or collection."""
+
+  name = 'du'
+
+  def __init__(self, parser):
+    parser.add_argument(
+        'asset_id',
+        nargs='*',
+        help='A folder or image collection to be inspected.')
+    parser.add_argument(
+        '--summarize', '-s', action='store_true',
+        help='Display only a total.')
+
+  def run(self, args, config):
+    """Runs the du command."""
+    config.ee_init()
+
+    # Select all available asset roots if no asset ids are given.
+    if not args.asset_id:
+      assets = ee.data.getAssetRoots()
+    else:
+      assets = [ee.data.getInfo(asset) for asset in args.asset_id]
+
+    # If args.summarize is True, list size+name for every leaf child asset,
+    # and show totals for non-leaf children.
+    # If args.summarize is False, print sizes of all children.
+    for asset in assets:
+      is_parent = asset['type'] in [
+          ee.data.ASSET_TYPE_FOLDER,
+          ee.data.ASSET_TYPE_IMAGE_COLL]
+      if not is_parent or args.summarize:
+        self._print_size(asset)
+      else:
+        children = ee.data.getList({'id': asset['id']})
+        if not children:
+          # A leaf asset
+          children = [asset]
+        for child in children:
+          self._print_size(child)
+
+  def _print_size(self, asset):
+    size = self._get_size(asset)
+    print('{:>16d}   {}'.format(size, asset['id']))
+
+  def _get_size(self, asset):
+    """Returns the size of the given asset in bytes."""
+    size_parsers = {
+        'Image': self._get_size_asset,
+        'Folder': self._get_size_folder,
+        'ImageCollection': self._get_size_image_collection,
+        'Table': self._get_size_asset,
+    }
+
+    if asset['type'] not in size_parsers:
+      raise ee.EEException(
+          'Cannot get size for asset type "%s"' % asset['type'])
+
+    return size_parsers[asset['type']](asset)
+
+  def _get_size_asset(self, asset):
+    info = ee.data.getInfo(asset['id'])
+
+    return info['properties']['system:asset_size']
+
+  def _get_size_folder(self, asset):
+    children = ee.data.getList({'id': asset['id']})
+    sizes = [self._get_size(child) for child in children]
+
+    return sum(sizes)
+
+  def _get_size_image_collection(self, asset):
+    images = ee.ImageCollection(asset['id'])
+    sizes = images.aggregate_array('system:asset_size')
+
+    return sum(sizes.getInfo())
 
 
 class MoveCommand(object):
@@ -809,6 +995,7 @@ class UploadImageCommand(object):
 
   def __init__(self, parser):
     _add_wait_arg(parser)
+    _add_overwrite_arg(parser)
     parser.add_argument(
         'src_files',
         help=('Cloud Storage URL(s) of the file(s) to upload. '
@@ -816,6 +1003,7 @@ class UploadImageCommand(object):
         nargs='+')
     parser.add_argument(
         '--asset_id',
+        required=True,
         help='Destination asset ID for the uploaded file.')
     parser.add_argument(
         '--last_band_alpha',
@@ -831,8 +1019,27 @@ class UploadImageCommand(object):
         '--pyramiding_policy',
         help='The pyramid reduction policy to use',
         type=_comma_separated_pyramiding_policies)
+    parser.add_argument(
+        '--bands',
+        help='Comma-separated list of names to use for the image bands.',
+        type=_comma_separated_strings)
+    parser.add_argument(
+        '--crs',
+        help='The coordinate reference system, to override the map projection '
+             'of the image. May be either a well-known authority code (e.g. '
+             'EPSG:4326) or a WKT string.')
     _add_property_flags(parser)
-    # TODO(user): add --bands arg
+
+  def _check_num_bands(self, bands, num_bands, flag_name):
+    """Checks the number of bands, creating them if there are none yet."""
+    if bands:
+      if len(bands) != num_bands:
+        raise ValueError(
+            'Inconsistent number of bands in --{}: expected {} but found {}.'
+            .format(flag_name, len(bands), num_bands))
+    else:
+      bands = ['b%d' % (i + 1) for i in xrange(num_bands)]
+    return bands
 
   def run(self, args, config):
     """Starts the upload task, and waits for completion if requested."""
@@ -844,46 +1051,107 @@ class UploadImageCommand(object):
           'last_band_alpha and nodata_value are mutually exclusive.')
 
     properties = _decode_property_flags(args)
+    source_files = utils.expand_gcs_wildcards(args.src_files)
+    bands = args.bands
+    if args.pyramiding_policy and len(args.pyramiding_policy) != 1:
+      bands = self._check_num_bands(bands, len(args.pyramiding_policy),
+                                    'pyramiding_policy')
+    if args.nodata_value and len(args.nodata_value) != 1:
+      bands = self._check_num_bands(bands, len(args.nodata_value),
+                                    'nodata_value')
 
     request = {
         'id': args.asset_id,
         'properties': properties
     }
 
-    source_files = utils.expand_gcs_wildcards(args.src_files)
     sources = [{'primaryPath': source} for source in source_files]
     tileset = {'sources': sources}
     if args.last_band_alpha:
       tileset['fileBands'] = [{'fileBandIndex': -1, 'maskForAllBands': True}]
     request['tilesets'] = [tileset]
 
+    if bands:
+      request['bands'] = [{'id': name} for name in bands]
+
     if args.pyramiding_policy:
       if len(args.pyramiding_policy) == 1:
-        request['pyramidingPolicy'] = args.pyramiding_policy[0].upper()
+        request['pyramidingPolicy'] = args.pyramiding_policy[0]
       else:
-        bands = []
         for index, policy in enumerate(args.pyramiding_policy):
-          bands.append({'id': index, 'pyramidingPolicy': policy.upper()})
-        request['bands'] = bands
+          request['bands'][index]['pyramidingPolicy'] = policy
 
     if args.nodata_value:
       if len(args.nodata_value) == 1:
         request['missingData'] = {'value': args.nodata_value[0]}
       else:
-        if 'bands' in request:
-          if len(request['bands']) != len(args.nodata_value):
-            raise ValueError('Inconsistent number of bands: {} and {}'
-                             .format(args.pyramiding_policy, args.nodata_value))
-        else:
-          request['bands'] = []
-        bands = request['bands']
         for index, nodata in enumerate(args.nodata_value):
-          if index < len(bands):
-            bands[index]['missingData'] = {'value': nodata}
-          else:
-            bands.append({'id': index, 'missingData': {'value': nodata}})
+          request['bands'][index]['missingData'] = {'value': nodata}
+
+    if args.crs:
+      request['crs'] = args.crs
 
     _upload(args, request, ee.data.startIngestion)
+
+
+# TODO(user): update src_files help string when secondary files
+# can be uploaded.
+class UploadTableCommand(object):
+  """Uploads a table from Cloud Storage to Earth Engine."""
+
+  name = 'table'
+
+  def __init__(self, parser):
+    _add_wait_arg(parser)
+    _add_overwrite_arg(parser)
+    parser.add_argument(
+        'src_file',
+        help=('Cloud Storage URL of the .zip or .shp file '
+        'to upload. Must have the prefix \'gs://\'. For .shp '
+        'files, related .dbf, .shx, and .prj files must be '
+        'present in the same location.'),
+        nargs=1)
+    parser.add_argument(
+        '--asset_id',
+        required=True,
+        help='Destination asset ID for the uploaded file.')
+    _add_property_flags(parser)
+    parser.add_argument(
+        '--max_error',
+        help='Max allowed error in meters when transforming geometry '
+             'between coordinate systems.',
+        type=int, nargs='?')
+    parser.add_argument(
+        '--max_vertices',
+        help='Max number of vertices per geometry. If set, geometry will be '
+             'subdivided into spatially disjoint pieces each under this limit.',
+        type=int, nargs='?')
+    parser.add_argument(
+        '--max_failed_features',
+        help='The maximum number of failed features to allow during ingestion.',
+        type=int, nargs='?')
+
+  def run(self, args, config):
+    """Starts the upload task, and waits for completion if requested."""
+    _check_valid_files(args.src_file)
+    config.ee_init()
+    source_files = list(utils.expand_gcs_wildcards(args.src_file))
+    if len(source_files) != 1:
+      raise ValueError('Exactly one file must be specified.')
+
+
+    source = {'primaryPath': source_files[0]}
+    if args.max_error:
+      source['max_error'] = args.max_error
+    if args.max_vertices:
+      source['max_vertices'] = args.max_vertices
+    if args.max_failed_features:
+      source['max_failed_features'] = args.max_failed_features
+    request = {
+        'id': args.asset_id,
+        'sources': [source]
+    }
+    _upload(args, request, ee.data.startTableIngestion)
 
 
 class UploadCommand(Dispatcher):
@@ -893,6 +1161,47 @@ class UploadCommand(Dispatcher):
 
   COMMANDS = [
       UploadImageCommand,
+      UploadTableCommand,
   ]
+
+
+class _UploadManifestBase(object):
+  """Uploads an asset to Earth Engine using the given manifest file."""
+
+  def __init__(self, parser):
+    _add_wait_arg(parser)
+    _add_overwrite_arg(parser)
+    parser.add_argument(
+        'manifest',
+        help=('Local path to a JSON asset manifest file.'))
+
+  def run(self, args, config, ingestion_function):
+    """Starts the upload task, and waits for completion if requested."""
+    config.ee_init()
+    with open(args.manifest) as fh:
+      manifest = json.loads(fh.read())
+
+    _upload(args, manifest, ingestion_function)
+
+
+class UploadImageManifestCommand(_UploadManifestBase):
+  """Uploads an image to Earth Engine using the given manifest file."""
+
+  name = 'upload_manifest'
+
+  def run(self, args, config):
+    """Starts the upload task, and waits for completion if requested."""
+    super(UploadImageManifestCommand, self).run(
+        args, config, ee.data.startIngestion)
+
+
+class UploadTableManifestCommand(_UploadManifestBase):
+  """Uploads a table to Earth Engine using the given manifest file."""
+
+  name = 'upload_table_manifest'
+
+  def run(self, args, config):
+    super(UploadTableManifestCommand, self).run(
+        args, config, ee.data.startTableIngestion)
 
 

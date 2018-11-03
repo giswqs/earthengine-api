@@ -121,7 +121,7 @@ ee.ImageCollection.reset = function() {
  * @export
  */
 ee.ImageCollection.prototype.getMap = function(opt_visParams, opt_callback) {
-  var args = ee.arguments.extract(
+  var args = ee.arguments.extractFromFunction(
       ee.ImageCollection.prototype.getMap, arguments);
   var mosaic = ee.ApiFunction._call('ImageCollection.mosaic', this);
   if (args['callback']) {
@@ -171,6 +171,16 @@ ee.ImageCollection.prototype.select = function(selectors, opt_names) {
   return /** @type {ee.ImageCollection} */ (this.map(function(img) {
     return img.select.apply(img, varargs);
   }));
+};
+
+/**
+ * Returns the first entry from a given collection.
+ *
+ * @return {ee.Image} The collection from which to select the first entry.
+ * @export
+ */
+ee.ImageCollection.prototype.first = function() {
+  return new ee.Image(ee.ApiFunction._call('Collection.first', this));
 };
 
 

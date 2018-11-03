@@ -2,7 +2,7 @@
 """The EE Python library."""
 
 
-__version__ = '0.1.102'
+__version__ = '0.1.153'
 
 # Using lowercase function naming to match the JavaScript names.
 # pylint: disable=g-bad-name
@@ -72,7 +72,10 @@ class _AlgorithmsContainer(dict):
 Algorithms = _AlgorithmsContainer()
 
 
-def Initialize(credentials='persistent', opt_url=None):
+def Initialize(
+    credentials='persistent',
+    opt_url=None
+):
   """Initialize the EE library.
 
   If this hasn't been called by the time any object constructor is used,
@@ -88,7 +91,11 @@ def Initialize(credentials='persistent', opt_url=None):
   """
   if credentials == 'persistent':
     credentials = _GetPersistentCredentials()
-  data.initialize(credentials, (opt_url + '/api' if opt_url else None), opt_url)
+  data.initialize(
+      credentials=credentials,
+      api_base_url=(opt_url + '/api' if opt_url else None),
+      tile_base_url=opt_url
+  )
   # Initialize the dynamically loaded functions on the objects that want them.
   ApiFunction.initialize()
   Element.initialize()
@@ -284,7 +291,12 @@ def _InitializeUnboundMethods():
       return lambda *args, **kwargs: f.call(*args, **kwargs)  # pylint: disable=unnecessary-lambda
     bound = GenerateFunction(func)
     bound.signature = signature
-    bound.__doc__ = str(func)
+    # Add docs. If there are non-ASCII characters in the docs, and we're in
+    # Python 2, use a hammer to force them into a str.
+    try:
+      bound.__doc__ = str(func)
+    except UnicodeEncodeError:
+      bound.__doc__ = func.__str__().encode('utf8')
     setattr(target, name_parts[0], bound)
 
 

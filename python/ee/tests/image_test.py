@@ -66,7 +66,18 @@ class ImageTestCase(apitestcase.ApiTestCase):
     """Verifies that imperative functions return ready values."""
     image = ee.Image(1)
     self.assertEquals({'value': 'fakeValue'}, image.getInfo())
-    self.assertEquals({'mapid': 'fakeMapId', 'image': image}, image.getMapId())
+    map_id = image.getMapId()
+    self.assertEquals('fakeMapId', map_id['mapid'])
+    self.assertEquals(image, map_id['image'])
+
+  def testGetMapIdVisualization(self):
+    """Verifies that imperative functions return ready values."""
+    image = ee.Image(1)
+    image.getMapId({'min': 0})
+
+    self.assertEquals(
+        ee.Image(1).visualize(min=0).serialize(),
+        self.last_mapid_call['data']['image'])
 
   def testCombine(self):
     """Verifies the behavior of ee.Image.combine_()."""
@@ -98,6 +109,10 @@ class ImageTestCase(apitestcase.ApiTestCase):
     self.assertEquals(ee.ApiFunction.lookup('Image.rename'), image.func)
     self.assertEquals(ee.List(['a', 'b']), image.args['names'])
 
+    image = ee.Image([1]).rename('a')
+    self.assertEquals(ee.ApiFunction.lookup('Image.rename'), image.func)
+    self.assertEquals(ee.List(['a']), image.args['names'])
+
   def testExpression(self):
     """Verifies the behavior of ee.Image.expression()."""
     image = ee.Image([1, 2]).expression('a', {'b': 'c'})
@@ -108,6 +123,8 @@ class ImageTestCase(apitestcase.ApiTestCase):
     def dummy_encoder(x):
       if isinstance(x, ee.encodable.Encodable):
         return x.encode(dummy_encoder)
+      elif isinstance(x, ee.encodable.EncodableFunction):
+        return x.encode_invocation(dummy_encoder)
       else:
         return x
 
@@ -160,6 +177,16 @@ class ImageTestCase(apitestcase.ApiTestCase):
         'region': json.dumps(geo_json),
     }, self.last_thumb_call['data'])
     self.assertEquals('/api/thumb?thumbid=3&token=4', url)
+
+    # Again with visualization parameters
+    url = ee.Image(1).getThumbURL({
+        'size': [13, 42],
+        'region': geo_json,
+        'min': 0
+    })
+    self.assertEquals(
+        ee.Image(1).visualize(min=0).serialize(),
+        self.last_thumb_call['data']['image'])
 
 
 if __name__ == '__main__':

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Singleton for all of the library's communcation with the Earth Engine API."""
+"""Singleton for the library's communication with the Earth Engine API."""
 
 from __future__ import print_function
 
@@ -11,8 +11,13 @@ from __future__ import print_function
 # pylint: disable=g-bad-import-order
 import contextlib
 import json
+import threading
+import time
+import uuid
+
 import httplib2
 import six
+
 
 # pylint: disable=g-import-not-at-top
 try:
@@ -29,11 +34,12 @@ from . import ee_exception
 # OAuth2 credentials object.  This may be set by ee.Initialize().
 _credentials = None
 
-# The base URL for all data calls.  This is set by ee.initialize().
+# The base URL for all data calls.  This is set by ee.Initialize().
 _api_base_url = None
 
-# The base URL for map tiles.  This is set by ee.initialize().
+# The base URL for map tiles.  This is set by ee.Initialize().
 _tile_base_url = None
+
 
 # Whether the module has been initialized.
 _initialized = False
@@ -42,20 +48,40 @@ _initialized = False
 # it timed out. 0 means no limit.
 _deadline_ms = 0
 
-# A function called when profile results are received from the server. Takes the
-# profile ID as an argument. None if profiling is disabled.
-#
-# This is a global variable because the alternative is to add a parameter to
-# ee.data.send_, which would then have to be propagated from the assorted API
-# call functions (ee.data.getInfo, ee.data.getMapId, etc.), and the user would
-# have to modify each call to profile, rather than enabling profiling as a
-# wrapper around the entire program (with ee.data.profiling, defined below).
-_profile_hook = None
 
+class _ThreadLocals(threading.local):
+
+  def __init__(self):
+    # pylint: disable=super-init-not-called
+
+    # A function called when profile results are received from the server. Takes
+    # the profile ID as an argument. None if profiling is disabled.
+    #
+    # This is a thread-local variable because the alternative is to add a
+    # parameter to ee.data.send_, which would then have to be propagated from
+    # the assorted API call functions (ee.data.getInfo, ee.data.getMapId, etc.),
+    # and the user would have to modify each call to profile, rather than
+    # enabling profiling as a wrapper around the entire program (with
+    # ee.data.profiling, defined below).
+    self.profile_hook = None
+
+
+_thread_locals = _ThreadLocals()
 
 # The HTTP header through which profile results are returned.
 # Lowercase because that's how httplib2 does things.
-_PROFILE_HEADER_LOWERCASE = 'x-earth-engine-computation-profile'
+_PROFILE_RESPONSE_HEADER_LOWERCASE = 'x-earth-engine-computation-profile'
+
+
+# Maximum number of times to retry a rate-limited request.
+MAX_RETRIES = 5
+
+# Maximum time to wait before retrying a rate-limited request (in milliseconds).
+MAX_RETRY_WAIT = 120000
+
+# Base time (in ms) to wait when performing exponential backoff in request
+# retries.
+BASE_RETRY_WAIT = 1000
 
 # The default base URL for API calls.
 DEFAULT_API_BASE_URL = 'https://earthengine.googleapis.com/api'
@@ -63,12 +89,22 @@ DEFAULT_API_BASE_URL = 'https://earthengine.googleapis.com/api'
 # The default base URL for media/tile calls.
 DEFAULT_TILE_BASE_URL = 'https://earthengine.googleapis.com'
 
+
 # Asset types recognized by create_assets().
 ASSET_TYPE_FOLDER = 'Folder'
 ASSET_TYPE_IMAGE_COLL = 'ImageCollection'
+# Max length of the above type names
+MAX_TYPE_LENGTH = len(ASSET_TYPE_IMAGE_COLL)
+
+# The maximum number of tasks to retrieve in each request to "/tasklist".
+_TASKLIST_PAGE_SIZE = 500
 
 
-def initialize(credentials=None, api_base_url=None, tile_base_url=None):
+def initialize(
+    credentials=None,
+    api_base_url=None,
+    tile_base_url=None
+):
   """Initializes the data module, setting credentials and base URLs.
 
   If any of the arguments are unspecified, they will keep their old values;
@@ -96,6 +132,7 @@ def initialize(credentials=None, api_base_url=None, tile_base_url=None):
   elif not _initialized:
     _tile_base_url = DEFAULT_TILE_BASE_URL
 
+
   _initialized = True
 
 
@@ -106,6 +143,8 @@ def reset():
   _api_base_url = None
   _tile_base_url = None
   _initialized = False
+
+
 
 
 def setDeadline(milliseconds):
@@ -132,13 +171,12 @@ def profiling(hook):
     hook: A function of one argument which is called with each profile
         ID obtained from API calls, just before the API call returns.
   """
-  global _profile_hook
-  saved_hook = _profile_hook
-  _profile_hook = hook
+  saved_hook = _thread_locals.profile_hook
+  _thread_locals.profile_hook = hook
   try:
     yield
   finally:
-    _profile_hook = saved_hook
+    _thread_locals.profile_hook = saved_hook
 
 
 
@@ -153,6 +191,8 @@ def getInfo(asset_id):
     The value call results.
   """
   return send_('/info', {'id': asset_id})
+
+
 
 
 def getList(params):
@@ -172,15 +212,18 @@ def getList(params):
   return send_('/list', params)
 
 
+
+
 def getMapId(params):
   """Get a Map ID for a given asset.
 
   Args:
     params: An object containing visualization options with the
             following possible values:
-      image - (JSON string) The image to render.
+      image - The image to render, as an Image or a JSON string.
+          The JSON string format is deprecated.
       version - (number) Version number of image (or latest).
-      bands - (comma-seprated strings) Comma-delimited list of
+      bands - (comma-separated strings) Comma-delimited list of
           band names to be mapped to RGB.
       min - (comma-separated numbers) Value (or one per band)
           to map onto 00.
@@ -191,27 +234,36 @@ def getMapId(params):
       bias - (comma-separated numbers) Offset (or one per band)
           to map onto 00-FF.
       gamma - (comma-separated numbers) Gamma correction
-          factor (or one per band)
+          factor (or one per band).
       palette - (comma-separated strings) A string of comma-separated
           CSS-style color strings (single-band previews only). For example,
           'FF0000,000000'.
-      format (string) Either 'jpg' (does not support transparency) or
-          'png' (supports transparency).
+      format - (string) The desired map tile image format. If omitted, one is
+          chosen automatically. Can be 'jpg' (does not support transparency)
+          or 'png' (supports transparency).
 
   Returns:
-    A dictionary containing "mapid" and "token" strings, which can
-    be combined to retrieve tiles from the /map service.
+    A dictionary containing:
+    - "mapid" and "token" strings: these identify the map.
+    - "tile_fetcher": a TileFetcher which can be used to fetch the tile
+      images, or to get a format for the tile URLs.
   """
+  if not isinstance(params['image'], six.string_types):
+    params['image'] = params['image'].serialize()
   params['json_format'] = 'v2'
-  return send_('/mapid', params)
+  result = send_('/mapid', params)
+  url_format = '%s/map/%s/{z}/{x}/{y}?token=%s' % (
+      _tile_base_url, result['mapid'], result['token'])
+  result['tile_fetcher'] = TileFetcher(url_format)
+  return result
 
 
 def getTileUrl(mapid, x, y, z):
   """Generate a URL for map tiles from a Map ID and coordinates.
 
   Args:
-    mapid: The Map ID to generate tiles for, a dictionary containing "mapid"
-        and "token" strings.
+    mapid: The Map ID to generate tiles for, a dictionary returned
+        by getMapId.
     x: The tile x coordinate.
     y: The tile y coordinate.
     z: The tile zoom level.
@@ -219,12 +271,59 @@ def getTileUrl(mapid, x, y, z):
   Returns:
     The tile URL.
   """
-  width = 2 ** z
-  x %= width
-  if x < 0:
-    x += width
-  return '%s/map/%s/%d/%d/%d?token=%s' % (
-      _tile_base_url, mapid['mapid'], z, x, y, mapid['token'])
+  return mapid['tile_fetcher'].format_tile_url(x, y, z)
+
+
+class TileFetcher(object):
+  """A helper class to fetch image tiles."""
+
+  def __init__(self, url_format):
+    self._url_format = url_format
+
+  @property
+  def url_format(self):
+    """Gets the URL format for this tile fetcher.
+
+    Returns:
+      A format string with {x}, {y}, and {z} placeholders.
+    """
+    return self._url_format
+
+  def format_tile_url(self, x, y, z):
+    """Generates the URL for a particular tile.
+
+    Args:
+      x: The tile x coordinate.
+      y: The tile y coordinate.
+      z: The tile zoom level.
+
+    Returns:
+      The tile's URL.
+    """
+    width = 2**z
+    x %= width
+    if x < 0:
+      x += width
+    return self.url_format.format(x=x, y=y, z=z)
+
+  def fetch_tile(self, x, y, z):
+    """Fetches the map tile specified by (x, y, z).
+
+    This method uses any credentials that were specified to ee.Initialize().
+
+    Args:
+      x: The tile x coordinate.
+      y: The tile y coordinate.
+      z: The tile zoom level.
+
+    Returns:
+      The map tile image data bytes.
+
+    Raises:
+      EEException if the fetch fails.
+    """
+    return send_(
+        self.format_tile_url(x, y, z), {}, opt_method='GET', opt_raw=True)
 
 
 def getValue(params):
@@ -239,6 +338,18 @@ def getValue(params):
   """
   params['json_format'] = 'v2'
   return send_('/value', params)
+
+
+def computeValue(obj):
+  """Sends a request to compute a value.
+
+  Args:
+    obj: A ComputedObject whose value is desired.
+
+  Returns:
+    The result of evaluating that object on the server.
+  """
+  return send_('/value', ({'json': obj.serialize(), 'json_format': 'v2'}))
 
 
 def getThumbnail(params):
@@ -279,6 +390,8 @@ def getThumbId(params):
   request = params.copy()
   request['getid'] = '1'
   request['json_format'] = 'v2'
+  if not isinstance(request['image'], six.string_types):
+    request['image'] = request['image'].serialize()
   if 'size' in request and isinstance(request['size'], (list, tuple)):
     request['size'] = 'x'.join(map(str, request['size']))
   return send_('/thumb', request)
@@ -398,7 +511,7 @@ def getAlgorithms():
   return send_('/algorithms', {}, 'GET')
 
 
-def createAsset(value, opt_path=None):
+def createAsset(value, opt_path=None, opt_force=False, opt_properties=None):
   """Creates an asset from a JSON value.
 
   To create an empty image collection or folder, pass in a "value" object
@@ -408,6 +521,9 @@ def createAsset(value, opt_path=None):
     value: An object describing the asset to create or a JSON string
         with the already-serialized value for the new asset.
     opt_path: An optional desired ID, including full path.
+    opt_force: True if asset overwrite is allowed
+    opt_properties: The keys and values of the properties to set
+        on the created asset.
 
   Returns:
     A description of the saved asset, including a generated ID.
@@ -417,20 +533,27 @@ def createAsset(value, opt_path=None):
   args = {'value': value, 'json_format': 'v2'}
   if opt_path is not None:
     args['id'] = opt_path
+  args['force'] = opt_force
+  if opt_properties is not None:
+    args['properties'] = json.dumps(opt_properties)
   return send_('/create', args)
 
 
-def copyAsset(sourceId, destinationId):
+def copyAsset(sourceId, destinationId, allowOverwrite=False
+             ):
   """Copies the asset from sourceId into destinationId.
 
   Args:
     sourceId: The ID of the asset to copy.
     destinationId: The ID of the new asset created by copying.
+    allowOverwrite: If True, allows overwriting an existing asset.
   """
-  send_('/copy', {
+  request = {
       'sourceId': sourceId,
       'destinationId': destinationId,
-  })
+      'allowOverwrite': allowOverwrite,
+      }
+  send_('/copy', request)
 
 
 def renameAsset(sourceId, destinationId):
@@ -476,7 +599,18 @@ def getTaskList():
     the current user. These include currently running tasks as well as recently
     canceled or failed tasks.
   """
-  return send_('/tasklist', {}, 'GET')['tasks']
+  params = {'pagesize': _TASKLIST_PAGE_SIZE}
+  tasks = []
+  while True:
+    r = send_('/tasklist', params, 'GET')
+    tasks.extend(r['tasks'])
+    next_page_token = r.get('next_page_token', '')
+    if not next_page_token:
+      break
+    params['pagetoken'] = next_page_token
+  return tasks
+
+
 
 
 def getTaskStatus(taskId):
@@ -500,9 +634,13 @@ def getTaskStatus(taskId):
   return send_('/taskstatus', args, 'GET')
 
 
+
+
 def cancelTask(taskId):
   """Cancels a batch task."""
   send_('/updatetask', {'id': taskId, 'action': 'CANCEL'})
+
+
 
 
 def startProcessing(taskId, params):
@@ -513,22 +651,23 @@ def startProcessing(taskId, params):
     params: The object that describes the processing task; only fields
       that are common for all processing types are documented below.
         type (string) Either 'EXPORT_IMAGE', 'EXPORT_FEATURES',
-          'EXPORT_VIDEO', or 'EXPORT_TILES'.
+          'EXPORT_VIDEO' or 'EXPORT_TILES'.
         json (string) JSON description of the image.
 
   Returns:
     A dict with optional notes about the created task.
   """
+
   args = params.copy()
   args['id'] = taskId
   return send_('/processingrequest', args)
 
 
-def startIngestion(taskId, params):
-  """Creates an asset import task.
+def startIngestion(request_id, params, allow_overwrite=False):
+  """Creates an image asset import task.
 
   Args:
-    taskId: ID for the task (obtained using newTaskId).
+    request_id (string): A unique ID for the ingestion, from newTaskId.
     params: The object that describes the import task, which can
         have these fields:
           id (string) The destination asset id (e.g. users/foo/bar).
@@ -542,14 +681,51 @@ def startIngestion(taskId, params):
             object names, e.g. 'gs://bucketname/filename.tif'
           bands (array) An optional list of band names formatted like:
             [{'id': 'R'}, {'id': 'G'}, {'id': 'B'}]
+    allow_overwrite: Whether the ingested image can overwrite an
+        existing version.
 
   Returns:
-    A dict with optional notes about the created task.
+    A dict with notes about the created task. This will include the ID for the
+    import task (under 'id'), which may be different from request_id.
   """
-  args = {'id': taskId, 'request': json.dumps(params)}
-  return send_('/ingestionrequest', args)
+  args = {
+      'id': request_id,
+      'request': json.dumps(params),
+      'allowOverwrite': allow_overwrite
+  }
+  result = send_('/ingestionrequest', args)
+  result['id'] = request_id
+  return result
 
 
+def startTableIngestion(request_id, params, allow_overwrite=False):
+  """Creates a table asset import task.
+
+  Args:
+    request_id (string): A unique ID for the ingestion, from newTaskId.
+    params: The object that describes the import task, which can
+        have these fields:
+          id (string) The destination asset id (e.g. users/foo/bar).
+          sources (array) A list of CNS source file paths with optional
+            character encoding formatted like:
+            "sources": [{ "primaryPath": "states.shp", "charset": "UTF-8" }]
+            Where path values correspond to source files' CNS locations,
+            e.g. 'googlefile://namespace/foobar.shp', and 'charset' refers to
+            the character encoding of the source file.
+    allow_overwrite: Whether the ingested image can overwrite an
+        existing version.
+  Returns:
+    A dict with notes about the created task. This will include the ID for the
+    import task (under 'id'), which may be different from request_id.
+  """
+  args = {
+      'id': request_id,
+      'tableRequest': json.dumps(params),
+      'allowOverwrite': allow_overwrite
+  }
+  result = send_('/ingestionrequest', args)
+  result['id'] = request_id
+  return result
 
 
 def getAssetRoots():
@@ -607,6 +783,8 @@ def getAssetAcl(assetId):
   return send_('/getacl', {'id': assetId}, 'GET')
 
 
+
+
 def setAssetAcl(assetId, aclUpdate):
   """Sets the access control list of the asset with the given ID.
 
@@ -658,7 +836,7 @@ def send_(path, params, opt_method='POST', opt_raw=False):
   """Send an API call.
 
   Args:
-    path: The API endpoint to call.
+    path: The API endpoint to call, or a full URL.
     params: The call parameters.
     opt_method: The HTTPRequest method (GET or POST).
     opt_raw: Whether the data should be returned raw, without attempting
@@ -673,11 +851,15 @@ def send_(path, params, opt_method='POST', opt_raw=False):
   # Make sure we never perform API calls before initialization.
   initialize()
 
-  if _profile_hook:
+  if _thread_locals.profile_hook:
     params = params.copy()
     params['profiling'] = '1'
 
-  url = _api_base_url + path
+
+  if not path.startswith('http'):
+    url = _api_base_url + path
+  else:
+    url = path
   headers = {}
 
 
@@ -696,17 +878,39 @@ def send_(path, params, opt_method='POST', opt_raw=False):
   else:
     raise ee_exception.EEException('Unexpected request method: ' + opt_method)
 
-  try:
-    response, content = http.request(url, method=opt_method, body=payload,
-                                     headers=headers)
-  except httplib2.HttpLib2Error as e:
-    raise ee_exception.EEException(
-        'Unexpected HTTP error: %s' % e.message)
+  def send_with_backoff(retries=0):
+    """Send an API call with backoff.
+
+    Attempts an API call. If the server's response has a 429 status, retry the
+    request using an incremental backoff strategy.
+
+    Args:
+      retries: The number of retries that have already occurred.
+
+    Returns:
+      A tuple of response, content returned by the API call.
+
+    Raises:
+      EEException: For errors from the server.
+    """
+    try:
+      response, content = http.request(
+          url, method=opt_method, body=payload, headers=headers)
+      if response.status == 429:
+        if retries < MAX_RETRIES:
+          time.sleep(min(2**retries * BASE_RETRY_WAIT, MAX_RETRY_WAIT) / 1000)
+          response, content = send_with_backoff(retries + 1)
+    except httplib2.HttpLib2Error as e:
+      raise ee_exception.EEException('Unexpected HTTP error: %s' % e.message)
+    return response, content
+
+  response, content = send_with_backoff()
 
   # Call the profile hook if present. Note that this is done before we handle
   # the content, so that profiles are reported even if the response is an error.
-  if _profile_hook and _PROFILE_HEADER_LOWERCASE in response:
-    _profile_hook(response[_PROFILE_HEADER_LOWERCASE])
+  if (_thread_locals.profile_hook and
+      _PROFILE_RESPONSE_HEADER_LOWERCASE in response):
+    _thread_locals.profile_hook(response[_PROFILE_RESPONSE_HEADER_LOWERCASE])
 
   # Whether or not the response is an error, it may be JSON.
   content_type = (response['content-type'] or 'application/json').split(';')[0]
@@ -722,7 +926,7 @@ def send_(path, params, opt_method='POST', opt_raw=False):
         # Python 2.x
         content = content
       json_content = json.loads(content)
-    except Exception as e:
+    except Exception:
       raise ee_exception.EEException('Invalid JSON: %s' % content)
     if 'error' in json_content:
       raise ee_exception.EEException(json_content['error']['message'])
@@ -734,8 +938,8 @@ def send_(path, params, opt_method='POST', opt_raw=False):
   if response.status < 100 or response.status >= 300:
     # Note if the response is JSON and contains an error value, we raise that
     # error above rather than this generic one.
-    raise ee_exception.EEException('Server returned HTTP code: %d' %
-                                   response.status)
+    raise ee_exception.EEException(
+        'Server returned HTTP code: %d' % response.status)
 
   # Now known not to be an error response...
   if opt_raw:
@@ -755,8 +959,10 @@ def create_assets(asset_ids, asset_type, mk_parents):
       continue
     if mk_parents:
       parts = asset_id.split('/')
-      path = ''
-      for part in parts[:-1]:
+      # Don't check the top level - for some users, the 'users' meta-folder is
+      # invisible.
+      path = parts[0] + '/'
+      for part in parts[1:-1]:
         path += part
         if getInfo(path) is None:
           createAsset({'type': ASSET_TYPE_FOLDER}, path)

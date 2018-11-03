@@ -3,6 +3,7 @@
 
 
 
+
 import unittest
 
 import ee
@@ -22,6 +23,7 @@ class ApiTestCase(unittest.TestCase):
     self.last_download_call = None
     self.last_thumb_call = None
     self.last_table_call = None
+    self.last_mapid_call = None
 
     ee.data.send_ = self.MockSend
 
@@ -34,7 +36,9 @@ class ApiTestCase(unittest.TestCase):
     elif path == '/value':
       return {'value': 'fakeValue'}
     elif path == '/mapid':
-      return {'mapid': 'fakeMapId'}
+      # Hang on to the call arguments.
+      self.last_mapid_call = {'url': path, 'data': params}
+      return {'mapid': 'fakeMapId', 'token': 'fakeToken'}
     elif path == '/download':
       # Hang on to the call arguments.
       self.last_download_call = {'url': path, 'data': params}
@@ -49,6 +53,8 @@ class ApiTestCase(unittest.TestCase):
       return {'docid': '5', 'token': '6'}
     else:
       raise Exception('Unexpected API call to %s with %s' % (path, params))
+
+
 
 BUILTIN_FUNCTIONS = {
     'Image.constant': {
@@ -202,6 +208,37 @@ BUILTIN_FUNCTIONS = {
         ],
         'description': '',
         'returns': 'Feature'
+    },
+    'Feature.select': {
+        'type': 'Algorithm',
+        'args': [
+            {
+                'description': 'The feature to select properties from.',
+                'name': 'input',
+                'type': 'Element'
+            },
+            {
+                'description': '',
+                'name': 'propertySelectors',
+                'type': 'List<String>'
+            },
+            {
+                'default': None,
+                'description': '',
+                'name': 'newProperties',
+                'optional': True,
+                'type': 'List<String>'
+            },
+            {
+                'default': True,
+                'description': '',
+                'name': 'retainGeometry',
+                'optional': True,
+                'type': 'Boolean'
+            }
+        ],
+        'description': '',
+        'returns': 'Element',
     },
     'Feature.get': {
         'type': 'Algorithm',
@@ -1119,6 +1156,197 @@ BUILTIN_FUNCTIONS = {
         'type': 'Algorithm',
         'description': ''
     },
+    'GeometryConstructors.LinearRing': {
+        'returns': 'Geometry',
+        'args': [
+            {
+                'name': 'coordinates',
+                'type': 'List<Object>',
+                'description': ''
+            },
+            {
+                'name': 'crs',
+                'type': 'Projection',
+                'description': '',
+                'optional': True,
+                'default': 'epsg:4326'
+            },
+            {
+                'default': None,
+                'description': '',
+                'optional': True,
+                'name': 'geodesic',
+                'type': 'Boolean'
+            },
+        ],
+        'type': 'Algorithm',
+        'description': ''
+    },
+    'GeometryConstructors.MultiGeometry': {
+        'returns': 'Geometry',
+        'args': [
+            {
+                'name': 'geometries',
+                'type': 'List<Geometry>',
+                'description': '',
+            },
+            {
+                'name': 'crs',
+                'type': 'Projection',
+                'description': '',
+                'optional': True,
+                'default': 'epsg:4326'
+            },
+            {
+                'default': None,
+                'description': '',
+                'optional': True,
+                'name': 'geodesic',
+                'type': 'Boolean'
+            },
+            {
+                'default': None,
+                'description': '',
+                'optional': True,
+                'name': 'maxError',
+                'type': 'ErrorMargin'
+            },
+        ],
+        'type': 'Algorithm',
+        'description': ''
+    },
+    'GeometryConstructors.MultiLineString': {
+        'returns': 'Geometry',
+        'args': [
+            {
+                'name': 'coordinates',
+                'type': 'List<Object>',
+                'description': ''
+            },
+            {
+                'name': 'crs',
+                'type': 'Projection',
+                'description': '',
+                'optional': True,
+                'default': 'epsg:4326'
+            },
+            {
+                'default': None,
+                'description': '',
+                'optional': True,
+                'name': 'geodesic',
+                'type': 'Boolean'
+            },
+            {
+                'default': None,
+                'description': '',
+                'optional': True,
+                'name': 'maxError',
+                'type': 'ErrorMargin'
+            },
+        ],
+        'type': 'Algorithm',
+        'description': ''
+    },
+    'GeometryConstructors.MultiPoint': {
+        'returns': 'Geometry',
+        'args': [
+            {
+                'name': 'coordinates',
+                'type': 'List<Object>',
+                'description': ''
+            },
+            {
+                'name': 'crs',
+                'type': 'Projection',
+                'description': '',
+                'optional': True,
+                'default': 'epsg:4326'
+            }
+        ],
+        'type': 'Algorithm',
+        'description': ''
+    },
+    'GeometryConstructors.MultiPolygon': {
+        'returns': 'Geometry',
+        'args': [
+            {
+                'name': 'coordinates',
+                'type': 'List<Object>',
+                'description': ''
+            },
+            {
+                'name': 'crs',
+                'type': 'Projection',
+                'description': '',
+                'optional': True,
+                'default': 'epsg:4326'
+            },
+            {
+                'default': None,
+                'description': '',
+                'optional': True,
+                'name': 'geodesic',
+                'type': 'Boolean'
+            },
+            {
+                'default': None,
+                'description': '',
+                'optional': True,
+                'name': 'maxError',
+                'type': 'ErrorMargin'
+            },
+            {
+                'default': None,
+                'description': '',
+                'optional': True,
+                'name': 'evenOdd',
+                'type': 'Boolean'
+            },
+        ],
+        'type': 'Algorithm',
+        'description': ''
+    },
+    'GeometryConstructors.Polygon': {
+        'returns': 'Geometry',
+        'args': [
+            {
+                'name': 'coordinates',
+                'type': 'List<Object>',
+                'description': ''
+            },
+            {
+                'name': 'crs',
+                'type': 'Projection',
+                'description': '',
+                'optional': True,
+                'default': 'epsg:4326'
+            },
+            {
+                'default': None,
+                'description': '',
+                'optional': True,
+                'name': 'geodesic',
+                'type': 'Boolean'
+            },
+            {
+                'default': None,
+                'description': '',
+                'optional': True,
+                'name': 'maxError',
+                'type': 'ErrorMargin'
+            },
+            {
+                'default': None,
+                'description': '',
+                'optional': True,
+                'name': 'evenOdd',
+                'type': 'Boolean'
+            },
+        ],
+        'type': 'Algorithm',
+        'description': ''
+    },
     # Element property setting, used by the client-side override.
     'Element.set': {
         'returns': 'Element',
@@ -1399,6 +1627,84 @@ BUILTIN_FUNCTIONS = {
         ],
         'returns': 'Dictionary'
     },
+    'Image.visualize': {
+        'type': 'Algorithm',
+        'args': [
+            {
+                'description': '',
+                'name': 'image',
+                'type': 'Image'
+            },
+            {
+                'description': '',
+                'name': 'bands',
+                'type': 'Object',
+                'optional': 'true',
+            },
+            {
+                'description': '',
+                'name': 'gain',
+                'type': 'Object',
+                'optional': 'true',
+            },
+            {
+                'description': '',
+                'name': 'bias',
+                'type': 'Object',
+                'optional': 'true',
+            },
+            {
+                'description': '',
+                'name': 'min',
+                'type': 'Object',
+                'optional': 'true',
+            },
+            {
+                'description': '',
+                'name': 'max',
+                'type': 'Object',
+                'optional': 'true',
+            },
+            {
+                'description': '',
+                'name': 'gamma',
+                'type': 'Object',
+                'optional': 'true',
+            },
+            {
+                'description': '',
+                'name': 'opacity',
+                'type': 'Object',
+                'optional': 'true',
+            },
+            {
+                'description': '',
+                'name': 'palette',
+                'type': 'Object',
+                'optional': 'true',
+            },
+            {
+                'description': '',
+                'name': 'forceRgbOutput',
+                'type': 'Boolean',
+                'optional': 'true'
+            }
+        ],
+        'description': '',
+        'returns': 'Image<unknown bands>',
+    },
+    'Collection.first': {
+        'type': 'Algorithm',
+        'args': [
+            {
+                'description': '',
+                'name': 'collection',
+                'type': 'FeatureCollection'
+            }
+        ],
+        'description': '',
+        'returns': 'Element',
+    },
 }
 
 
@@ -1462,7 +1768,7 @@ ENCODED_JSON_SAMPLE = {
             5,
             7,
             3.4,
-            2.5,
+            112233445566778899,
             'hello',
             {'type': 'ValueRef', 'value': '0'},
             {'type': 'ValueRef', 'value': '1'},
@@ -1475,3 +1781,4 @@ ENCODED_JSON_SAMPLE = {
     ],
     'value': {'type': 'ValueRef', 'value': '7'}
 }
+

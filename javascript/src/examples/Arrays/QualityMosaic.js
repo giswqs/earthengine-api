@@ -34,7 +34,8 @@ function qualityMosaic(bands) {
 
 // Load the l7_l1t collection for the year 2000, and make sure the first band
 // is our quality measure, in this case the normalized difference values.
-var l7 = ee.ImageCollection('LE7').filterDate('2000-01-01', '2001-01-01');
+var l7 = ee.ImageCollection('LANDSAT/LE07/C01/T1')
+    .filterDate('2000-01-01', '2001-01-01');
 var withNd = l7.map(function(image) {
   return image.normalizedDifference(['B4', 'B3']).addBands(image);
 });
@@ -47,6 +48,6 @@ var greenest = qualityMosaic(withNd);
 // approach is that clouds are greener than water. So all the water is white.
 var rgb = greenest.select(['B3', 'B2', 'B1']);
 
-Map.addLayer(rgb, {gain: '1.4, 1.4, 1.1'}, 'Greenest');
+Map.addLayer(rgb, {gain: [1.4, 1.4, 1.1]}, 'Greenest');
 Map.setCenter(-90.08789, 16.38339, 11);
 

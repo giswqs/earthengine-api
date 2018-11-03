@@ -130,7 +130,7 @@ ee.Package.makeFunction = function(signature, body) {
  * @param {string} path The path to save the package under.
  */
 ee.Package.save = function(pkg, path) {
-  var args = ee.arguments.extract(ee.Package.save, arguments);
+  var args = ee.arguments.extractFromFunction(ee.Package.save, arguments);
   pkg = args['pkg'];
   path = args['path'];
 
@@ -303,7 +303,7 @@ ee.Package.encodeDecl_ = function(signature, name) {
       if (i > 0) {
         out.push(', ');
       }
-      out.push(signature.args[i]['type'] + ' ' + signature.args[i]['name']);
+      out.push(signature.args[i].type + ' ' + signature.args[i].name);
     }
   }
   out.push(')');

@@ -1,6 +1,7 @@
 <link rel="import" href="../../bower_components/polymer/polymer.html">
 
 <link rel="import" href="../../bower_components/iron-ajax/iron-ajax.html">
+<link rel="import" href="../../bower_components/iron-flex-layout/iron-flex-layout-classes.html">
 <link rel="import" href="../../bower_components/iron-image/iron-image.html">
 <link rel="import" href="../../bower_components/iron-resizable-behavior/iron-resizable-behavior.html">
 <link rel="import" href="../../bower_components/iron-selector/iron-selector.html">
@@ -12,7 +13,7 @@
 
 <dom-module id="forest-picker-panel">
   <template>
-    <style>
+    <style include="iron-flex iron-flex-alignment">
       /** Variables. */
       :host {
         --thumbnail-height: 120px;
@@ -35,7 +36,7 @@
       }
 
       :host[narrow-viewport] .outer-container.iron-selected .inner-container {
-        @apply(--shadow-elevation-3dp);
+        @apply --shadow-elevation-3dp;
       }
 
       :host[narrow-viewport] iron-selector {
@@ -87,7 +88,7 @@
       }
 
       :host:not([narrow-viewport]) #selection-container {
-        @apply(--layout-horizontal);
+        @apply --layout-horizontal;
       }
 
       :host:not([narrow-viewport]) #destinationPickerWrapper {
@@ -112,7 +113,7 @@
       }
 
       #selection-container {
-        @apply(--layout-center);
+        @apply --layout-center;
         overflow: hidden;
       }
 
@@ -181,7 +182,7 @@
       }
 
       :host paper-spinner {
-        @apply(--layout-fit);
+        @apply --layout-fit;
         display: block;
         margin: auto;
       }
@@ -198,7 +199,7 @@
 
       paper-tabs {
         --paper-tabs-selection-bar: {
-          height: 4px;
+          border-bottom-width: 4px;
         };
         --paper-tabs-selection-bar-color: var(--paper-teal-400);
       }
